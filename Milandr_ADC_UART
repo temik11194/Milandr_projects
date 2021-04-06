@@ -1,0 +1,417 @@
+///////////////////////////////////////////////////////////////////////////////////////
+//Version 1.03
+//                         
+/////////////////////////////////////////////////////////////////////////////////////////////
+
+#include "MDR32Fx.h"
+#include "MDR32F9Qx_port.h" 
+#include "MDR32F9Qx_rst_clk.h"
+#include "MDR32F9Qx_adc.h"
+#include "MDR32F9Qx_uart.h"
+
+ ADC_InitTypeDef ADC; //Общая инициализацинная структура подсистемы АЦП
+ ADCx_InitTypeDef ADC1; //Инициализацинная структура для АЦП1
+ ADCx_InitTypeDef ADC2; //Инициализацинная структура для АЦП2
+ PORT_InitTypeDef PortInit;    // определение переменной для инициализации портов ввода вывода 
+ UART_InitTypeDef UART_InitStructure; // определение переменной для инициализации UART
+ uint32_t uart2_IT_TX_flag = RESET; // Флаг устанавливается после передачи одного байта
+ uint32_t uart2_IT_RX_flag = RESET; // Флаг устанавливается после приема одного байта
+ 
+void UART2_IRQHandler(void)
+    {
+      if (UART_GetITStatusMasked(MDR_UART2, UART_IT_RX) == SET) //проверка установки флага прерывания по окончании приема данных 
+				  {
+           UART_ClearITPendingBit(MDR_UART2, UART_IT_RX);//очистка флага прерывания 
+			     uart2_IT_RX_flag = SET; //установка флага передача данных завершена 
+					}
+      if (UART_GetITStatusMasked(MDR_UART2, UART_IT_TX) == SET) //проверка установки флага прерывания по окончании передачи данных 
+				  {
+           UART_ClearITPendingBit(MDR_UART2, UART_IT_TX); //очистка флага прерывания 
+			     uart2_IT_TX_flag = SET; //установка флага передача данных завершена 
+			    }
+    }
+
+//unsigned volatile char flagComp = 0;
+unsigned volatile char flagComp;
+
+  void ADCInit()   { 
+//Подача тактования на процессор и АЦП
+ RST_CLK_PCLKcmd(RST_CLK_PCLK_RST_CLK | RST_CLK_PCLK_ADC, ENABLE);
+ ADC_StructInit(&ADC); //Заполнение структуры умолч. значениями
+ ADC_Init(&ADC); //Инициализация
+ ADCx_StructInit(&ADC1);
+//ADC1.ADC_ChannelSwitching = ADC_CH_SWITCHING_Enable; 
+ ADC1.ADC_ChannelNumber = ADC_CH_ADC2 & ADC_CH_ADC4; //Switch to TRIM!!! //pd2 and pd4
+ ADC1.ADC_LevelControl = ADC_LEVEL_CONTROL_Disable;
+ ADC1.ADC_LowLevel = 0;
+ ADC1.ADC_HighLevel = 0;
+ ADC1.ADC_DelayGo = 7;
+ ADC1.ADC_Prescaler = ADC_CLK_div_512;
+ ADC1_Init(&ADC1);
+		
+		 ADCx_StructInit(&ADC2);
+		 ADC2.ADC_ChannelNumber = ADC_CH_ADC3; //Switch to TRIM!!! //pd3
+     ADC2.ADC_LevelControl = ADC_LEVEL_CONTROL_Disable;
+     ADC2.ADC_LowLevel = 0;
+     ADC2.ADC_HighLevel = 0;
+     ADC2.ADC_DelayGo = 7;
+     ADC2.ADC_Prescaler = ADC_CLK_div_512;
+     ADC2_Init(&ADC2);
+		
+		
+ 
+//Int 
+//Инициализация прерываний АЦП
+ NVIC_EnableIRQ(ADC_IRQn);
+ NVIC_SetPriority(ADC_IRQn, 0);
+//Включение прерываний по окончанию преобразования
+ ADC1_ITConfig(ADCx_IT_END_OF_CONVERSION, ENABLE);
+ ADC2_ITConfig(ADCx_IT_END_OF_CONVERSION, ENABLE);
+ ADC1_Cmd(ENABLE); //Включение АЦП1
+ ADC2_Cmd(ENABLE); //Включение АЦП2
+       }
+			 
+void UARTInit()	
+			 {
+				 RST_CLK_HSEconfig(RST_CLK_HSE_ON); // Включение HSE осциллятора (внешнего кварцевого резонатора) для обеспечения стабильной частоты UART
+    if (RST_CLK_HSEstatus() == SUCCESS) // Если HSE осциллятор включился и прошел текст	
+{
+// Выбор HSE осциллятора в качестве источника тактовых импульсов для CPU_PLL
+// и установка умножителя тактовой частоты CPU_PLL равного 7 
+	RST_CLK_CPU_PLLconfig(RST_CLK_CPU_PLLsrcHSEdiv1, 7);
+
+	// Включение схемы PLL
+     RST_CLK_CPU_PLLcmd(ENABLE);
+     if (RST_CLK_HSEstatus() == SUCCESS) //Если включение CPU_PLL прошло успешно
+	   {
+     RST_CLK_CPUclkPrescaler(RST_CLK_CPUclkDIV2); // Установка CPU_C3_prescaler = 2
+     RST_CLK_CPU_PLLuse(ENABLE); // Установка CPU_C2_SEL от CPU_PLL выхода вместо CPU_C1 такта
+/* Выбор CPU_C3 такта на мультиплексоре тактовых импульсов микропроцессора (CPU clock MUX) */ 
+	   RST_CLK_CPUclkSelection(RST_CLK_CPUclkCPU_C3);
+     }
+     else while(1);// блок CPU_PLL не включился 
+}
+else while(1); // кварцевый резонатор HSE не включился
+
+//Разрешение тактирования UART2
+RST_CLK_PCLKcmd(RST_CLK_PCLK_UART2, ENABLE); // Инициализация делителя тактовой частоты для UART2 
+UART_BRGInit(MDR_UART2, UART_HCLKdiv1); // Разрешение прерывания для UART2
+NVIC_EnableIRQ(UART2_IRQn);
+
+// Заполнение полей для переменной UART_InitStructure
+UART_InitStructure.UART_BaudRate = 115200; //тактовая частота передачи данных 
+UART_InitStructure.UART_WordLength = UART_WordLength8b; //длина символов 8 бит
+UART_InitStructure.UART_StopBits = UART_StopBits1; //1 стоп бит
+UART_InitStructure.UART_Parity = UART_Parity_No; // нет контроля четности
+UART_InitStructure.UART_FIFOMode = UART_FIFO_OFF; // выключение FIFO буфера /* Аппаратный контроль за передачей и приемом */ 
+UART_InitStructure.UART_HardwareFlowControl = UART_HardwareFlowControl_RXE | UART_HardwareFlowControl_TXE;
+
+UART_Init (MDR_UART2, &UART_InitStructure); //Инициализация UART2
+UART_ITConfig (MDR_UART2, UART_IT_RX, ENABLE);//Разрешение прерывания по приему 
+UART_ITConfig (MDR_UART2, UART_IT_TX, ENABLE);//Разрешение прерывания по окончани передачи
+UART_Cmd(MDR_UART2, ENABLE); //Разрешение работы UART2 
+
+       }		 
+
+int main(void)
+{	           
+//						 int j;
+	timer_init();
+	adc_init();	
+	port_init();
+	UARTInit();
+  flagComp = 0;     
+		
+   while(1)
+     {     
+
+			     while((MDR_PORTA->RXTX & 0x01)!=0) //если НК = 1
+//						 			     while((MDR_PORTA->RXTX & 0x01)==0) //если НК = 0
+					 {	
+
+//						 for(j=0; j<45;j++)
+						 
+						 
+						 
+						 
+/*						 for(j=0; j<70;j++)
+          {
+		           __nop(); __nop(); __nop(); __nop(); __nop();
+        
+					}
+						 
+						 */
+						 
+//						 MDR_PORTC->RXTX = 0x02;
+//						 MDR_PORTC->RXTX = 0x00;
+						
+						 
+						 
+	          result_adc = get_adc();	//start ADC1 and ADC2
+
+						trans(result_adc, 1);	// go result_adc on PC1
+		  
+		       } 
+     }
+}
+
+// End of main
+
+void Frequency_CLK_PLL(unsigned int pll_on, unsigned int pll_mul)
+{  
+     MDR_RST_CLK->HS_CONTROL = 0x01;                 // start outside resonator HSE
+     while ((MDR_RST_CLK->CLOCK_STATUS&0x04) == 0) __NOP(); // awaiting for start HSE and PLL
+     MDR_RST_CLK->CPU_CLOCK = 0x0102;                // start CPU_CLK
+     if(pll_on == PLL_EN)
+     {
+          MDR_RST_CLK->PLL_CONTROL = (1<<2)|(pll_mul<<8);    // start PLL    
+          while ((MDR_RST_CLK->CLOCK_STATUS & 0x02)==0) __NOP();  	// awaiting for start HSE and PLL
+          MDR_RST_CLK->CPU_CLOCK = 0x0106;               		// start CPU_CLK
+     }
+}
+void timer_init(void)
+{
+//start pll
+	Frequency_CLK_PLL(PLL_EN, 7);     //start CLK
+	MDR_RST_CLK->PER_CLOCK = 0xFFFFFFFF; 	//start CLK to ports
+}
+
+void port_init(void)
+{	
+	//init PA1 and PA3  as TMR1_CH1 and TMR2_CH2 ;
+	MDR_PORTA->OE  	&= ~0x0a;		//PA3, PA1 - input;
+  MDR_PORTA->FUNC     = 0;
+	MDR_PORTA->ANALOG   |= 0x0a;		//PA3, PA1 - digital;
+	MDR_PORTA->PULL 	|= 0x0a;		//PA3, PA1 - pull down en;
+	MDR_PORTA->PULL 	&= ~0x000a0000;//PA3, PA1 - pull up dis;
+	MDR_PORTA->PD 		|= 0x0a0000;	//PA3, PA1 - input schmidt trigger enable 400 mv;
+	MDR_PORTA->PWR      |= 0xcc /*0x0444*/;	//fast slope
+	MDR_PORTA->GFEN	 = 0;  		//disable input filter	
+     
+     //init PA0 and PA2  as NK and !NK input ;
+	MDR_PORTA->OE  	&= ~0x15;		//PA0, PA2 - input;    	
+	MDR_PORTA->ANALOG   |= 0x15;		//PA0, PA2 - digital;
+	MDR_PORTA->PULL 	|= 0x15;		//PA3, PA1 - pull down en;
+	MDR_PORTA->PULL 	&= ~0x00150000;//PA3, PA1 - pull up dis;
+	MDR_PORTA->PD 		|= 0x150000;	//PA3, PA1 - input schmidt trigger enable 400 mv;
+	MDR_PORTA->PWR      |= 0x333;	     //fast slope
+	MDR_PORTA->GFEN	 = 0;  		//disable input filter	
+			
+	//init output channel PC0,PC1 - for gates and ADC output
+	MDR_PORTC->OE     |= 0x00000003;   //PC0,PC1 - output	
+  MDR_PORTC->FUNC   &= 0xfffffff0;   //PC0,PC1 - port                
+  MDR_PORTC->ANALOG = 0x0000ffff;    //PC0,PC1 - digital
+	MDR_PORTC->PULL   &= 0xfffcffff;   //PC0,PC1 - pull up dis  
+  MDR_PORTC->PULL   |= 0x00000003;    //PC0,PC1 - pull down en  
+	MDR_PORTC->PD     &= ~0x00000003;  //PC0,PC1 - runable driver
+  MDR_PORTC->PWR    |=  0x0000000f;  //fastest rising                 
+  MDR_PORTC->GFEN   = 0; 
+  MDR_PORTC->RXTX   |= 0x00000001; //
+
+ //init PD0 and PD1 - for UART
+      MDR_PORTD->OE     |= 0x00000001;   // - output	
+      MDR_PORTD->FUNC   |= 0x0000000A;   // - port 
+		  MDR_PORTD->ANALOG |= 0x00000003;    //PC0,PC1 - digital
+	    MDR_PORTD->PULL   |= 0;   //PD0,PD1 - pull up dis	
+	    MDR_PORTD->PD     |= 0;  //PD0,PD1 - runable driver
+      MDR_PORTD->PWR    |=  0x0000000F;  //fastest rising                 
+      MDR_PORTD->GFEN   |= 0; 
+      MDR_PORTD->RXTX   |= 0x00000003;
+
+
+
+// заполнение полей переменной PortInit для обеспечения работы UART
+/*PortInit.PORT_PULL_UP = PORT_PULL_UP_OFF;
+PortInit.PORT_PULL_DOWN = PORT_PULL_DOWN_OFF;
+PortInit.PORT_PD_SHM = PORT_PD_SHM_OFF;
+PortInit.PORT_PD = PORT_PD_DRIVER;
+PortInit.PORT_GFEN = PORT_GFEN_OFF;
+PortInit.PORT_FUNC = PORT_FUNC_OVERRID;
+PortInit.PORT_SPEED = PORT_SPEED_MAXFAST;
+PortInit.PORT_MODE = PORT_MODE_DIGITAL;
+*/
+}
+
+void adc_init(void)
+{
+     //uint32_t a;
+	//init PD2 as ADC pin
+	MDR_PORTD->PULL 	=0;//&= 0xfffbfffb;	//disable pull up/down
+	MDR_PORTD->ANALOG &= 0xffffffe3;	//PD2, PD3, PD4 -analog
+	
+	//enable ADC tick
+	MDR_RST_CLK->ADC_MCO_CLOCK = 0x2020;
+	
+	//configure ADC register
+	MDR_ADC->ADC1_CFG = 0x00000025; //pd2
+  MDR_ADC->ADC2_CFG = 0x00000035; //pd3
+}
+
+unsigned int get_adc(void)
+{	
+//	int orlov = 0;
+	int b = 0;
+	unsigned int data1=0, data2=0;       
+
+//						 for(b=0; b<133;b++) без UART
+//	             for(b=0; b<123;b++)
+	               for(b=0; b<120;b++)
+          {
+/*						if((MDR_PORTA->RXTX & 0x02)!=0)
+          orlov = 1;
+						*/
+//		         MDR_PORTC->RXTX = 0x02;    / опрос по PA1
+//						 MDR_PORTC->RXTX = 0x00;
+           __nop();
+					}
+					
+					
+					
+/*					if((MDR_PORTA->RXTX & 0x02)!=0)
+          orlov = 1;
+	
+//					   MDR_PORTC->RXTX = 0x02;     // опрос компаратора
+//						 MDR_PORTC->RXTX = 0x00;	
+	
+	if(orlov == 1)//---------> ch2 and ch3 x1 and x10
+     {
+
+			 
+//	        MDR_PORTC->RXTX = 0x02;    // опрос по PA1
+//					MDR_PORTC->RXTX = 0x00;
+			 
+*/			 
+          MDR_ADC->ADC1_CFG = 0x00000025;    // pd2
+			    MDR_ADC->ADC2_CFG = 0x00000035;    // pd3
+          MDR_ADC->ADC1_CFG |= 0x00000002;   // запуск АЦП1
+			    MDR_ADC->ADC2_CFG |= 0x00000002;   // запуск АЦП2	 
+			    while(((MDR_ADC->ADC1_STATUS&0x04)==0) && ((MDR_ADC->ADC2_STATUS&0x04)==0));      
+//			 	         MDR_PORTC->RXTX = 0x02;    // начало АЦП
+//						     MDR_PORTC->RXTX = 0x00;
+          data1 = MDR_ADC->ADC1_RESULT&0x0fff;
+			    data2 = MDR_ADC->ADC2_RESULT&0x0fff; 
+ //         return (data1 | (uint32_t)(flagComp)<<13);
+//			    if(data2 >  0x0f00)
+					if(data2 >  0x0d00)
+          { 
+						
+	   UART_SendData (MDR_UART2, 1); //отправляем x1
+	   while (uart2_IT_TX_flag != SET) //ждем пока байт уйдет
+     uart2_IT_TX_flag = RESET; //очищаем флаг передачи 
+		        
+ //              return (data1 | (uint32_t)0<<12 | (uint32_t)0<<13 | (uint32_t)1<<14);   //результат с pd2 (x1) 
+return (data1 | (uint32_t)0<<12 | (uint32_t)0<<13);   //результат с pd2 (x1)   						
+          }
+          else
+          { 
+						
+	   UART_SendData (MDR_UART2, 10); //отправляем x10
+	   while (uart2_IT_TX_flag != SET) //ждем пока байт уйдет
+     uart2_IT_TX_flag = RESET; //очищаем флаг передачи 	
+		        
+ //              return (data2 | (uint32_t)1<<12 | (uint32_t)0<<13  | (uint32_t)1<<14);   // результат с pd3 (x10)
+return (data2 | (uint32_t)1<<12 | (uint32_t)0<<13);   // результат с pd3 (x10) 						
+          } 
+          			 
+		 }
+		 
+		 
+/*     else //ch4 x100
+     {
+			 
+//			 	    MDR_PORTC->RXTX = 0x02;    // опрос по PA1
+//						MDR_PORTC->RXTX = 0x00;
+			 
+         MDR_ADC->ADC1_CFG = 0x00000045;    // pd4 
+         MDR_ADC->ADC2_CFG = 0x00000035;    // pd3			 
+         MDR_ADC->ADC1_CFG |= 0x00000002;   // запуск АЦП1
+			   MDR_ADC->ADC2_CFG |= 0x00000002;   // запуск АЦП2
+         while(((MDR_ADC->ADC1_STATUS&0x04)==0) && ((MDR_ADC->ADC2_STATUS&0x04)==0));      
+//			 	         MDR_PORTC->RXTX = 0x02;    // начало АЦП
+//						     MDR_PORTC->RXTX = 0x00;
+          data1 = MDR_ADC->ADC1_RESULT&0x0fff;
+			    data2 = MDR_ADC->ADC2_RESULT&0x0fff; 
+//         return (data1 | (uint32_t)1<<13 ); 
+//          if(data1 >  0x0f00)
+						if(data1 >  0x0d00)
+          {
+						
+	   UART_SendData (MDR_UART2, 10); //отправляем x10
+	   while (uart2_IT_TX_flag != SET) //ждем пока байт уйдет
+     uart2_IT_TX_flag = RESET; //очищаем флаг передачи 	
+            						
+   //            return (data2 | (uint32_t)1<<12 | (uint32_t)0<<13 | (uint32_t)0<<14);   //результат с pd3 (x10)  
+return (data2 | (uint32_t)1<<12 | (uint32_t)0<<13);   //результат с pd3 (x10)    						
+          }
+          else
+          {
+						
+	   UART_SendData (MDR_UART2, 100); //отправляем x100
+	   while (uart2_IT_TX_flag != SET) //ждем пока байт уйдет
+     uart2_IT_TX_flag = RESET; //очищаем флаг передачи 		
+            						
+   //            return (data1 | (uint32_t)0<<12 | (uint32_t)1<<13 | (uint32_t)0<<14);   // результат с pd4 (x100) 
+return (data1 | (uint32_t)0<<12 | (uint32_t)1<<13);   // результат с pd4 (x100)  						
+          } 			 
+     } 
+
+}
+*/
+void trans (unsigned int data, unsigned int lenght)
+{
+     int j;
+  unsigned int art;	
+	unsigned int kondr;
+	
+	art = data >> 4;
+
+	   UART_SendData (MDR_UART2, art); //отправляем результат АЦП
+	   while (uart2_IT_TX_flag != SET) //ждем пока байт уйдет
+     uart2_IT_TX_flag = RESET; //очищаем флаг передачи 
+
+
+	
+	          for(j=0; j<(14);j++)
+          {
+MDR_PORTC->RXTX = 0x02;
+kondr = data >> (14 - j);
+//		UART_SendData (MDR_UART2, kondr); //отправляем байт				
+MDR_PORTC->RXTX = (kondr&0x02);
+						
+						   __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+						   __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+						
+MDR_PORTC->RXTX = 0x00;
+					}
+/*	
+//			data <<= 1;
+                data >>= 1;
+          for(j=0; j<(15-lenght+2);j++)
+          {
+               MDR_PORTC->RXTX = 0x02;
+//              MDR_PORTC->RXTX = (data&0x02);
+                         MDR_PORTC->RXTX = (data&0x02);				
+
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();						
+		
+//               data >>=(lenght);
+                       data <<= (lenght);						
+							 MDR_PORTC->RXTX = 0x00;
+          }		
+					*/
+  				
+ for(j=0; j<100000;j++)
+          {
+		           __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+               __nop(); __nop(); __nop(); __nop(); __nop();
+					}
+}
