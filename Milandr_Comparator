@@ -1,0 +1,192 @@
+#include "MDR32Fx.h"
+#include "MDR32F9Qx_port.h"
+#include "MDR32F9Qx_rst_clk.h"
+#include "MDR32F9Qx_comp.h"
+
+#define USE_INVERTION //Инверсия выходного сигнала
+#define RANGE			COMP_CVREF_RANGE_Up; //Установка диапазона порога (Up - верхний(0), Down - нижний (1))
+#define SCALE			COMP_CVREF_SCALE_15_div_32; //Установка значения порога в Вольтах (см.таблицу)
+
+
+/* 		Up						Down
+8/32	0.83	|		0/24	0.00
+9/32	0.93	|		1/24	0.14
+10/32	1.03	|		2/24	0.28
+11/32	1.13	|		3/24	0.41
+12/32	1.24	|		4/24	0.55
+13/32	1.34	|		5/24	0.69
+14/32	1.44	|		6/24	0.83
+15/32	1.55	|		7/24	0.96
+16/32	1.65	|		8/24	1.10
+17/32	1.75	|		9/24	1.24
+18/32	1.86	|		10/24	1.38
+19/32	1.96	|		11/24	1.51
+20/32	2.06	|		12/24	1.65
+21/32	2.17	|		13/24	1.79
+22/32	2.27	|		14/24	1.93
+23/32	2.37	|		15/24	2.06
+*/
+
+		PORT_InitTypeDef PORT_InitStructure;
+		COMP_InitTypeDef COMP_InitStructure;
+		COMP_CVRefInitTypeDef COMP_CVRefInitStructure;
+
+void port_init(void)
+{
+	//Включение тактирования порта A
+	RST_CLK_PCLKcmd(RST_CLK_PCLK_PORTA,ENABLE);
+	
+		//Заполнение структуры для инициализации порта A
+	PORT_InitStructure.PORT_PULL_UP 		= PORT_PULL_UP_OFF;
+	PORT_InitStructure.PORT_PULL_DOWN 	= PORT_PULL_DOWN_ON;
+	PORT_InitStructure.PORT_MODE 				= PORT_MODE_DIGITAL;
+	PORT_InitStructure.PORT_GFEN 				= PORT_GFEN_OFF;
+	PORT_InitStructure.PORT_FUNC 				= PORT_FUNC_PORT;
+	
+	
+		//Конфигурируем ножку PA0
+	PORT_InitStructure.PORT_OE 		= PORT_OE_IN;
+	PORT_InitStructure.PORT_Pin 	= PORT_Pin_0;
+	PORT_Init(MDR_PORTA, &PORT_InitStructure);
+	
+		//Включение тактирования порта Е
+	RST_CLK_PCLKcmd(RST_CLK_PCLK_PORTE,ENABLE);
+	
+		//Заполнение структуры для инициализации порта
+	PORT_InitStructure.PORT_PULL_UP 		= PORT_PULL_UP_OFF;
+	PORT_InitStructure.PORT_PULL_DOWN 	= PORT_PULL_DOWN_OFF;
+	PORT_InitStructure.PORT_MODE 				= PORT_MODE_ANALOG;
+	
+		//Конфигурируем ножку 2 порта Е как IN1 компаратора
+	PORT_InitStructure.PORT_OE 		= PORT_OE_IN;
+	PORT_InitStructure.PORT_Pin 	= PORT_Pin_2;
+	PORT_Init(MDR_PORTE, &PORT_InitStructure);
+	
+		//Включение тактирования порта D
+	RST_CLK_PCLKcmd(RST_CLK_PCLK_PORTD,ENABLE);
+	PORT_StructInit(&PORT_InitStructure);
+	
+		//Заполнение структуры для инициализации порта
+	PORT_InitStructure.PORT_MODE = PORT_MODE_DIGITAL;
+	
+		//Конфигурируем ножку 3 порта D как выход
+	PORT_InitStructure.PORT_OE 			= PORT_OE_OUT;
+	PORT_InitStructure.PORT_Pin 		= PORT_Pin_3;
+	PORT_InitStructure.PORT_SPEED 	= PORT_SPEED_FAST;
+	PORT_Init(MDR_PORTD, &PORT_InitStructure);
+}
+
+void comp_init(void)
+{
+	//Включаем тактирование компаратора
+	RST_CLK_PCLKcmd(RST_CLK_PCLK_COMP,ENABLE);
+	
+		//Инициализация структуры значениями по умолчанию
+	COMP_StructInit(&COMP_InitStructure);
+	
+		//Заполнение структуры инициализации компаратора
+	COMP_InitStructure.COMP_PlusInputSource 	= COMP_PlusInput_CVREF;
+	COMP_InitStructure.COMP_MinusInputSource 	= COMP_MinusInput_IN1;
+			#ifdef USE_INVERTION
+				COMP_InitStructure.COMP_OutInversion = COMP_OUT_INV_Enable;
+			#endif
+	
+		//Инициализация аналогового компаратора
+	COMP_Init(&COMP_InitStructure);
+	
+		//Инициализация структуры опорного напряжения значениями по умолчанию
+	COMP_CVRefStructInit(&COMP_CVRefInitStructure);
+	
+		//Заполнение элементов структуры для инициализации источника опорного напряжения
+	COMP_CVRefInitStructure.COMP_CVRefSource 		= COMP_CVREF_SOURCE_AVdd;
+	COMP_CVRefInitStructure.COMP_CVRefRange 		= RANGE;
+	COMP_CVRefInitStructure.COMP_CVRefScale 		= SCALE;
+	
+		//Инициализация источника опрного напряжения
+	COMP_CVRefInit(&COMP_CVRefInitStructure);
+	
+		//Разрешение работы аналогового компаратора
+	COMP_Cmd(ENABLE);
+	
+			//Проверка готовности аналогового компаратора
+		while(COMP_GetCfgFlagStatus(COMP_CFG_FLAG_READY) != SET){};
+		
+		//Разрешение работы источника опорного напряжения
+			COMP_CVRefCmd(ENABLE);
+}
+
+/*
+void timer_init(void)
+{
+	
+}
+*/
+
+				int time = 150; //Длительность выходного сигнала
+		
+void delay(int a) //временная задержка выходного сигнала
+{
+	int i = 0;
+	for(i = 0; i <= a; i++) {}
+}
+	
+int main(void)
+{
+	port_init();
+	comp_init();
+	
+							/* Включение HSE осциллятора (внешнего кварцевого резонатора)*/
+					RST_CLK_HSEconfig(RST_CLK_HSE_ON);
+				if (RST_CLK_HSEstatus() == SUCCESS) /* Если HSE осциллятор включился и прошел текст*/
+				{
+							// Выбор HSE осциллятора в качестве источника тактовых импульсов для CPU_PLL
+							// и установка умножителя тактовой частоты CPU_PLL равного 7 // Частота внешнего кварца равна 8 МГц Максимальная частота процессора 80 МГц ,
+							// RST_CLK_CPU_PLLconfig ( Источник тактирования PLL, Коэффициент умножения 10=9+1);
+							RST_CLK_CPU_PLLconfig ( RST_CLK_CPU_PLLsrcHSEdiv1, 9 );
+											/* Включение схемы PLL*/
+							RST_CLK_CPU_PLLcmd(ENABLE);
+					if (RST_CLK_CPU_PLLstatus() == SUCCESS) //Если включение CPU_PLL прошло успешно
+					{
+								/* Установка CPU_C3_prescaler = 2 */
+								RST_CLK_CPUclkPrescaler(RST_CLK_CPUclkDIV2);
+								/* Установка CPU_C2_SEL от CPU_PLL выхода вместо CPU_C1 такта*/
+								RST_CLK_CPU_PLLuse(ENABLE);
+								/* Выбор CPU_C3 такта на мультиплексоре тактовых импульсов микропроцессора (CPU clock MUX) */
+								RST_CLK_CPUclkSelection(RST_CLK_CPUclkCPU_C3);
+					}
+				else /* блок CPU_PLL не включился*/
+						{while(1);}
+				}
+				else /* кварцевый резонатор HSE не включился */
+				{while(1);}
+		
+			while (1)
+			{
+				//while((MDR_PORTA->RXTX & 0x01) != 0) //Пока PA0 != 0 (НК)
+				if (PORT_ReadInputDataBit(MDR_PORTA, PORT_Pin_0) != 0)
+				{
+												//delay(1);
+												PORT_SetBits(MDR_PORTD, PORT_Pin_3);
+												PORT_ResetBits(MDR_PORTD, PORT_Pin_3);
+							//Проверяем флаг компаратора и устанавливаем ножку 3 порта D по результату сравнения.
+						if (COMP_GetFlagStatus(COMP_STATUS_FLAG_AS))
+						{
+							PORT_SetBits(MDR_PORTD, PORT_Pin_3); //Установка лог. "1"
+												//MDR_PORTD->RXTX=0x04;
+							delay(time); // длительность выходного сигнала
+												//MDR_PORTD->RXTX=0x00;
+							PORT_ResetBits(MDR_PORTD, PORT_Pin_3); //Установка лог. "0"
+						}
+						else 
+						{
+							PORT_ResetBits(MDR_PORTD, PORT_Pin_3); //Установка лог. "0"
+						}
+												//PORT_SetBits(MDR_PORTD, PORT_Pin_3);
+												//PORT_ResetBits(MDR_PORTD, PORT_Pin_3);
+				}
+			}
+												/* Выход
+												MDR_PORTC->RXTX=0x00; (0x02)  //сигнал с определенной длительностью
+												_nop();
+												*/
+}
